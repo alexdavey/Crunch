@@ -1,5 +1,8 @@
 import os
+import pickle
 from multiprocessing import Pool
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import wandb
@@ -7,18 +10,20 @@ from tensorboard.backend.event_processing import event_accumulator
 
 
 # Recursively find all event files in a directory
-def find_event_files(log_dir):
+def find_event_files(log_dir: str):
+    path = Path(log_dir).expanduser()
     event_files = []
-    for root, dirs, files in os.walk(log_dir):
+    for root, _, files in os.walk(path):
         for file in files:
             if file.startswith("events.out.tfevents"):
                 event_files.append(os.path.join(root, file))
     return event_files
 
-def process_file(args):
+
+def process_file(args: dict):
     filepath, log_dir, filter_tag = args
     run_name = os.path.relpath(os.path.dirname(filepath), log_dir)
-    result = { run_name: { "full_filepath": filepath } }
+    result = {run_name: {"full_filepath": filepath}}
     try:
         ea = event_accumulator.EventAccumulator(filepath)
         ea.Reload()
@@ -30,17 +35,19 @@ def process_file(args):
             steps = [e.step for e in events]
             values = [e.value for e in events]
 
-            result[run_name][tag] = {
-                "steps": steps,
-                "values": values
-            }
+            result[run_name][tag] = {"steps": steps, "values": values}
     except Exception as e:
         print(f"Error loading {filepath}: {e}")
 
     return result
 
+
 # Load scalar data from each event file
-def load_tensorboard_scalars(log_dir, filter_tag=None, include_empty=False):
+def load_tensorboard_scalars(
+    log_dir: str,
+    filter_tag: str | None = None,
+    include_empty: bool = False,
+):
     event_files = find_event_files(log_dir)
     inputs = [(file, log_dir, filter_tag) for file in event_files]
 
@@ -57,8 +64,14 @@ def load_tensorboard_scalars(log_dir, filter_tag=None, include_empty=False):
     return all_scalars
 
 
-def load_wandb_scalars(tag, project, metric="eval/poleval", step="global_step"):
-    api = wandb.Api(timeout=30)
+def load_wandb_scalars(
+    tag: str,
+    project: str,
+    metric: str = "eval/poleval",
+    step: str = "global_step",
+    timeout: int = 30,
+):
+    api = wandb.Api(timeout=timeout)
     runs = api.runs(path=project, filters={"tags": tag})
 
     results = {}
@@ -66,7 +79,9 @@ def load_wandb_scalars(tag, project, metric="eval/poleval", step="global_step"):
     for run in runs:
         steps = []
         values = []
-        data = run.scan_history(keys=[step, metric], page_size=100000, min_step=None, max_step=None)
+        data = run.scan_history(
+            keys=[step, metric], page_size=100000, min_step=None, max_step=None
+        )
 
         for entry in data:
             if metric in entry:
@@ -84,3 +99,13 @@ def load_wandb_scalars(tag, project, metric="eval/poleval", step="global_step"):
         }
 
     return results
+
+
+def save_pickle(filename: str, data: Any):
+    with open(filename, "wb") as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def load_pickle(filename: str):
+    with open(filename, "rb") as f:
+        return pickle.load(f)
